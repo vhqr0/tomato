@@ -1,4 +1,4 @@
-package tomato
+package vpn
 
 import (
 	"bytes"
@@ -59,37 +59,37 @@ type Vpn struct {
 	lastSeq   uint32
 }
 
-func (vpn *Vpn) waitingForPeer(now uint64) bool {
-	return vpn.DynUpdate && timeDelta(now, vpn.lastTs) >= vpn.AddrValidTime
+func (server *Vpn) waitingForPeer(now uint64) bool {
+	return server.DynUpdate && timeDelta(now, server.lastTs) >= server.AddrValidTime
 }
 
-func (vpn *Vpn) shouldUpdatePeer(addr *net.UDPAddr) bool {
-	return vpn.DynUpdate &&
-		(!vpn.peerAddr.IP.Equal(addr.IP) ||
-			vpn.peerAddr.Port != addr.Port)
+func (server *Vpn) shouldUpdatePeer(addr *net.UDPAddr) bool {
+	return server.DynUpdate &&
+		(!server.peerAddr.IP.Equal(addr.IP) ||
+			server.peerAddr.Port != addr.Port)
 }
 
-func (vpn *Vpn) invalidPeer(addr *net.UDPAddr) bool {
-	return !vpn.DynUpdate &&
-		(!vpn.peerAddr.IP.Equal(addr.IP) ||
-			vpn.peerAddr.Port != addr.Port)
+func (server *Vpn) invalidPeer(addr *net.UDPAddr) bool {
+	return !server.DynUpdate &&
+		(!server.peerAddr.IP.Equal(addr.IP) ||
+			server.peerAddr.Port != addr.Port)
 }
 
-func (vpn *Vpn) invalidHeader(now, ts uint64, seq uint32) bool {
+func (server *Vpn) invalidHeader(now, ts uint64, seq uint32) bool {
 	// notice: very rare case, seq inc from 0xffff to 0 in 1s will
 	// cause packet loss, but don't fix it.
-	return timeDelta(now, ts) >= vpn.PktValidTime ||
-		ts < vpn.lastTs ||
-		(ts == vpn.lastTs && seq <= vpn.lastSeq)
+	return timeDelta(now, ts) >= server.PktValidTime ||
+		ts < server.lastTs ||
+		(ts == server.lastTs && seq <= server.lastSeq)
 }
 
-func (vpn *Vpn) sender() {
-	defer vpn.wg.Done()
+func (server *Vpn) sender() {
+	defer server.wg.Done()
 
 	var buf [4096]byte
 
 	// get block cipher
-	key := md5.Sum([]byte(vpn.LocalPwd))
+	key := md5.Sum([]byte(server.LocalPwd))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		log.Println(err)
@@ -98,7 +98,7 @@ func (vpn *Vpn) sender() {
 
 	for seq := uint32(0); ; seq++ {
 		// get packet
-		rn, err := vpn.tun.Read(buf[44:])
+		rn, err := server.tun.Read(buf[44:])
 		if err != nil {
 			log.Println(err)
 			return
@@ -106,8 +106,8 @@ func (vpn *Vpn) sender() {
 		n := 44 + rn
 
 		now := timeStamp()
-		if vpn.waitingForPeer(now) {
-			if vpn.LogTrace {
+		if server.waitingForPeer(now) {
+			if server.LogTrace {
 				log.Println("waiting for peer connection")
 			}
 			continue
@@ -127,7 +127,7 @@ func (vpn *Vpn) sender() {
 		stream.XORKeyStream(buf[16:n], buf[16:n])
 
 		// do send
-		wn, err := vpn.localConn.WriteTo(buf[:n], vpn.peerAddr)
+		wn, err := server.localConn.WriteTo(buf[:n], server.peerAddr)
 		if err != nil {
 			log.Println(err)
 			return
@@ -137,19 +137,19 @@ func (vpn *Vpn) sender() {
 			return
 		}
 
-		if vpn.LogTrace {
-			log.Printf("send %d bytes to %v", rn, vpn.peerAddr)
+		if server.LogTrace {
+			log.Printf("send %d bytes to %v", rn, server.peerAddr)
 		}
 	}
 }
 
-func (vpn *Vpn) receiver() {
-	defer vpn.wg.Done()
+func (server *Vpn) receiver() {
+	defer server.wg.Done()
 
 	var buf [4096]byte
 
 	// get block cipher
-	key := md5.Sum([]byte(vpn.PeerPwd))
+	key := md5.Sum([]byte(server.PeerPwd))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		log.Println(err)
@@ -158,19 +158,19 @@ func (vpn *Vpn) receiver() {
 
 	for {
 		// get ciphertext
-		rn, addr, err := vpn.localConn.ReadFromUDP(buf[:])
+		rn, addr, err := server.localConn.ReadFromUDP(buf[:])
 		if err != nil {
 			log.Println(err)
 			return
 		}
 		if rn < 44 {
-			if vpn.LogTrace {
+			if server.LogTrace {
 				log.Printf("invalid length from %v", addr)
 			}
 			continue
 		}
-		if vpn.invalidPeer(addr) {
-			if vpn.LogTrace {
+		if server.invalidPeer(addr) {
+			if server.LogTrace {
 				log.Printf("invalid address from %v", addr)
 			}
 			continue
@@ -181,7 +181,7 @@ func (vpn *Vpn) receiver() {
 		stream.XORKeyStream(buf[16:rn], buf[16:rn])
 		mac := hmacSum(buf[32:rn], key[:])
 		if !bytes.Equal(mac, buf[16:32]) {
-			if vpn.LogTrace {
+			if server.LogTrace {
 				log.Printf("invalid hmac from %v", addr)
 			}
 			continue
@@ -190,30 +190,30 @@ func (vpn *Vpn) receiver() {
 		// validate header
 		ts := binary.BigEndian.Uint64(buf[32:40])
 		seq := binary.BigEndian.Uint32(buf[40:44])
-		if vpn.invalidHeader(timeStamp(), ts, seq) {
-			if vpn.LogTrace {
+		if server.invalidHeader(timeStamp(), ts, seq) {
+			if server.LogTrace {
 				log.Printf("invalid header from %v", addr)
 			}
 			continue
 		}
 
 		// update state
-		vpn.lastSeq = seq
-		vpn.lastTs = ts
-		if vpn.shouldUpdatePeer(addr) {
+		server.lastSeq = seq
+		server.lastTs = ts
+		if server.shouldUpdatePeer(addr) {
 			log.Printf("update peer from %v to %v",
-				vpn.peerAddr, addr)
-			vpn.peerAddr = addr
+				server.peerAddr, addr)
+			server.peerAddr = addr
 		}
 		if rn == 44 {
-			if vpn.LogTrace {
+			if server.LogTrace {
 				log.Printf("recv 0 bytes from %v", addr)
 			}
 			continue
 		}
 
 		// do receive
-		wn, err := vpn.tun.Write(buf[44:rn])
+		wn, err := server.tun.Write(buf[44:rn])
 		if err != nil {
 			log.Println(err)
 			return
@@ -222,13 +222,13 @@ func (vpn *Vpn) receiver() {
 			log.Println("write tun failed")
 			return
 		}
-		if vpn.LogTrace {
+		if server.LogTrace {
 			log.Printf("recv %d bytes from %v", wn, addr)
 		}
 	}
 }
 
-func (vpn *Vpn) ListenAndServe() {
+func (server *Vpn) ListenAndServe() {
 	// open tun device
 	fd, err := unix.Open(devPath, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -239,7 +239,7 @@ func (vpn *Vpn) ListenAndServe() {
 
 	// set tun interface
 	var ifr [ifrSize]byte
-	iface := []byte(vpn.Iface)
+	iface := []byte(server.Iface)
 	if len(iface) >= unix.IFNAMSIZ {
 		log.Println("interface overflow")
 		return
@@ -265,10 +265,10 @@ func (vpn *Vpn) ListenAndServe() {
 	// create tun
 	tun := os.NewFile(uintptr(fd), devPath)
 	defer tun.Close()
-	vpn.tun = tun
+	server.tun = tun
 
 	// resolve conn
-	local, err := net.ResolveUDPAddr("udp", vpn.LocalAddr)
+	local, err := net.ResolveUDPAddr("udp", server.LocalAddr)
 	if err != nil {
 		log.Println(err)
 		return
@@ -279,19 +279,19 @@ func (vpn *Vpn) ListenAndServe() {
 		return
 	}
 	defer conn.Close()
-	vpn.localConn = conn
+	server.localConn = conn
 
 	// resolve peer
-	peer, err := net.ResolveUDPAddr("udp", vpn.PeerAddr)
+	peer, err := net.ResolveUDPAddr("udp", server.PeerAddr)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	vpn.peerAddr = peer
+	server.peerAddr = peer
 
 	// relay
-	vpn.wg.Add(2)
-	go vpn.sender()
-	go vpn.receiver()
-	vpn.wg.Wait()
+	server.wg.Add(2)
+	go server.sender()
+	go server.receiver()
+	server.wg.Wait()
 }

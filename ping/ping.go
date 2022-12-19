@@ -1,4 +1,4 @@
-package tomato
+package ping
 
 import (
 	"encoding/binary"
@@ -33,8 +33,8 @@ type Ping struct {
 	id   uint16
 }
 
-func (ping *Ping) sender() {
-	defer ping.wg.Done()
+func (server *Ping) sender() {
+	defer server.wg.Done()
 
 	var buf [256]byte
 
@@ -51,25 +51,25 @@ func (ping *Ping) sender() {
 			log.Println(err)
 			return
 		}
-		binary.BigEndian.PutUint16(buf[4:6], ping.id)
+		binary.BigEndian.PutUint16(buf[4:6], server.id)
 		binary.BigEndian.PutUint16(buf[6:8], seq)
 		binary.BigEndian.PutUint16(buf[2:4], checkSum(buf[:n]))
 
-		if _, err := ping.conn.Write(buf[:n]); err != nil {
+		if _, err := server.conn.Write(buf[:n]); err != nil {
 			log.Println(err)
 			return
 		}
-		time.Sleep(time.Duration(ping.Internal * uint64(time.Second)))
+		time.Sleep(time.Duration(server.Internal * uint64(time.Second)))
 	}
 }
 
-func (ping *Ping) receiver() {
-	defer ping.wg.Done()
+func (server *Ping) receiver() {
+	defer server.wg.Done()
 
 	var buf [4096]byte
 
 	for {
-		n, err := ping.conn.Read(buf[:])
+		n, err := server.conn.Read(buf[:])
 		if err != nil {
 			log.Println(err)
 			return
@@ -88,7 +88,7 @@ func (ping *Ping) receiver() {
 		code := icmpbuf[1]
 		id := binary.BigEndian.Uint16(icmpbuf[4:6])
 		seq := binary.BigEndian.Uint16(icmpbuf[6:8])
-		if typ != 0 || code != 0 || id != ping.id {
+		if typ != 0 || code != 0 || id != server.id {
 			continue
 		}
 
@@ -96,19 +96,19 @@ func (ping *Ping) receiver() {
 	}
 }
 
-func (ping *Ping) ListenAndServe() {
-	ping.id = uint16(os.Getpid())
+func (server *Ping) ListenAndServe() {
+	server.id = uint16(os.Getpid())
 
-	conn, err := net.Dial("ip4:icmp", ping.PeerAddr)
+	conn, err := net.Dial("ip4:icmp", server.PeerAddr)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	defer conn.Close()
-	ping.conn = conn
+	server.conn = conn
 
-	ping.wg.Add(2)
-	go ping.sender()
-	go ping.receiver()
-	ping.wg.Wait()
+	server.wg.Add(2)
+	go server.sender()
+	go server.receiver()
+	server.wg.Wait()
 }

@@ -4,9 +4,9 @@ import (
 	"flag"
 	"log"
 
-	ping "github.com/vhqr0/tomato/ping"
-	proxy "github.com/vhqr0/tomato/proxy"
-	vpn "github.com/vhqr0/tomato/vpn"
+	"github.com/vhqr0/tomato/ping"
+	"github.com/vhqr0/tomato/proxy"
+	"github.com/vhqr0/tomato/vpn"
 )
 
 var (
