@@ -14,8 +14,8 @@ var (
 	iface     = flag.String("if", "tun0", "tun interface")
 	localaddr = flag.String("la", ":1080", "local address")
 	peeraddr  = flag.String("pa", ":1080", "peer address")
-	localpwd  = flag.String("lpwd", "", "local password")
-	peerpwd   = flag.String("ppwd", "", "peer password")
+	localpwd  = flag.String("lp", "", "local password")
+	peerpwd   = flag.String("pp", "", "peer password")
 	rulemode  = flag.String("rm", "direct", "rule mode")
 	rulefile  = flag.String("rf", "", "rule db file")
 	internal  = flag.Uint64("it", 30, "ping internal")
@@ -23,6 +23,8 @@ var (
 	addrvt    = flag.Uint64("avt", 60, "peer address valid time")
 	dynupdate = flag.Bool("du", false, "dynamic update peer address")
 	forward   = flag.Bool("fw", false, "forward proxy request")
+	forcev4   = flag.Bool("4", false, "force use IPv4")
+	forcev6   = flag.Bool("6", false, "force use IPv6")
 	verbose   = flag.Bool("v", false, "verbose trace info")
 )
 
@@ -57,6 +59,8 @@ func main() {
 		server := ping.Ping{
 			PeerAddr: *peeraddr,
 			Internal: *internal,
+			ForceV4:  *forcev4,
+			ForceV6:  *forcev6,
 		}
 		server.ListenAndServe()
 	default:
