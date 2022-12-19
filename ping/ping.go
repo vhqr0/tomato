@@ -42,6 +42,6 @@ func (server *Ping) ListenAndServe() {
 		server.listenAndServe4()
 	} else {
 		log.Printf("target v6: %v", addr)
-		server.listenAndServer6()
+		server.listenAndServe6()
 	}
 }

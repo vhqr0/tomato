@@ -86,7 +86,7 @@ func (server *Ping) receiver6() {
 	}
 }
 
-func (server *Ping) listenAndServer6() {
+func (server *Ping) listenAndServe6() {
 	conn, err := net.DialIP("ip6:ipv6-icmp", nil, server.addr)
 	if err != nil {
 		log.Println(err)
