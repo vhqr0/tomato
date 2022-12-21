@@ -1,92 +1,96 @@
 package proxy
 
 import (
-	"database/sql"
+	"bufio"
+	"io"
 	"log"
+	"os"
 	"strings"
 )
 
 const (
-	RULE_BLOCK = iota
-	RULE_DIRECT
-	RULE_FORWARD
+	DIR_BLOCK = iota
+	DIR_DIRECT
+	DIR_FORWARD
 )
 
-func (server *Proxy) setupRule() {
+func (server *Proxy) loadRule() {
 	server.ruleCache = make(map[string]int)
-	switch server.Direction {
-	case "block":
-		server.direction = RULE_BLOCK
-	case "direct":
-		server.direction = RULE_DIRECT
-	case "forward":
-		server.direction = RULE_FORWARD
-	default:
-		log.Fatalf("unrecognized rule: %s", server.Direction)
-	}
-	if len(server.RuleFile) != 0 {
-		db, err := sql.Open("sqlite3", server.RuleFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		stmt, err := db.Prepare("select rule from data where domain = ?")
-		if err != nil {
-			log.Fatal(err)
-		}
-		server.ruleDb = db
-		server.ruleStmt = stmt
-	}
 
+	// open rule file
+	f, err := os.Open(server.RuleFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+
+	for n := 0; ; n++ {
+		// read line
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err != io.EOF {
+				log.Fatal(err)
+			}
+			break
+		}
+
+		// strip and skip empty or comment line
+		line = strings.TrimSpace(line)
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+
+		// split tokens
+		tokens := strings.Split(line, "\t")
+		if len(tokens) != 2 {
+			log.Fatalf("unrecognized rule in line %d: %s", n, line)
+		}
+		direction := tokens[0]
+		domain := tokens[1]
+
+		// update cache if domain not in cache
+		if _, ok := server.ruleCache[domain]; ok {
+			continue
+		}
+		switch direction {
+		case "block":
+			server.ruleCache[domain] = DIR_BLOCK
+		case "direct":
+			server.ruleCache[domain] = DIR_DIRECT
+		case "forward":
+			server.ruleCache[domain] = DIR_FORWARD
+		default:
+			log.Fatalf("unrecognized direction in line %d: %s", n, direction)
+		}
+	}
 }
 
 func (server *Proxy) matchRule(domain string) int {
-	// not use rule db
-	if server.ruleDb == nil {
+	// no rule
+	if !server.doMatchRule {
 		return server.direction
 	}
 
 	// hit in cache
 	server.ruleCacheMutex.RLock()
-	rule, ok := server.ruleCache[domain]
+	direction, ok := server.ruleCache[domain]
 	server.ruleCacheMutex.RUnlock()
 	if ok {
-		return rule
+		return direction
 	}
 
-	// query db
-	var ruleStr string
-	err := server.ruleStmt.QueryRow(domain).Scan(&ruleStr)
-	if err == nil {
-		// hit in db
-		switch ruleStr {
-		case "block":
-			rule = RULE_BLOCK
-		case "direct":
-			rule = RULE_DIRECT
-		case "forward":
-			rule = RULE_FORWARD
-		default:
-			log.Fatalf("unrecognized rule: %s", ruleStr)
-		}
-	} else if err == sql.ErrNoRows {
-		// not hit in db
-		pos := strings.IndexByte(domain, '.')
-		if pos == -1 {
-			// in the end, not match
-			rule = server.direction
-		} else {
-			// recusive match
-			rule = server.matchRule(domain[pos+1:])
-		}
+	// recursive find in cache
+	if pos := strings.IndexByte(domain, '.'); pos == -1 {
+		direction = server.direction
 	} else {
-		// db error
-		log.Fatal(err)
+		direction = server.matchRule(domain[pos+1:])
 	}
 
 	// update cache
 	server.ruleCacheMutex.Lock()
-	server.ruleCache[domain] = rule
+	server.ruleCache[domain] = direction
 	server.ruleCacheMutex.Unlock()
 
-	return rule
+	return direction
 }

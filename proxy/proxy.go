@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -10,8 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type Proxy struct {
@@ -23,10 +20,9 @@ type Proxy struct {
 
 	direction      int
 	doForward      bool
+	doMatchRule    bool
 	ruleCache      map[string]int
 	ruleCacheMutex sync.RWMutex
-	ruleDb         *sql.DB
-	ruleStmt       *sql.Stmt
 	directClient   http.Client
 	forwardClient  http.Client
 }
@@ -34,32 +30,32 @@ type Proxy struct {
 func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	rule := server.matchRule(r.URL.Hostname())
+	direction := server.matchRule(r.URL.Hostname())
 
 	// trace
 	if server.LogTrace {
-		var ruleStr string
-		switch rule {
-		case RULE_BLOCK:
-			ruleStr = "block"
-		case RULE_DIRECT:
-			ruleStr = "direct"
-		case RULE_FORWARD:
-			ruleStr = "forward"
+		var dirStr string
+		switch direction {
+		case DIR_BLOCK:
+			dirStr = "block"
+		case DIR_DIRECT:
+			dirStr = "direct"
+		case DIR_FORWARD:
+			dirStr = "forward"
 		default:
-			log.Fatalf("unrecognized rule: %d", rule)
+			log.Fatalf("unrecognized direction: %d", direction)
 		}
-		log.Printf("%v %v <=> %v [%s]", r.Method, r.RemoteAddr, r.Host, ruleStr)
+		log.Printf("%v %v <=> %v [%s]", r.Method, r.RemoteAddr, r.Host, dirStr)
 	}
 
-	if rule == RULE_BLOCK {
+	if direction == DIR_BLOCK {
 		return
 	}
 
 	if r.Method == http.MethodConnect {
 		// do connect
 		var addr string
-		if server.doForward && rule == RULE_FORWARD {
+		if server.doForward && direction == DIR_FORWARD {
 			addr = server.ForwardAddr
 		} else {
 			addr = r.Host
@@ -82,7 +78,7 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer cliconn.Close()
 
-		if server.doForward && rule == RULE_FORWARD {
+		if server.doForward && direction == DIR_FORWARD {
 			// forward request to proxy, proxy will send response
 			srvconn.Write([]byte(fmt.Sprintf(
 				"CONNECT %s %s\r\nHost: %s\r\n\r\n",
@@ -121,7 +117,7 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// do request
 		var client *http.Client
-		if server.doForward && rule == RULE_FORWARD {
+		if server.doForward && direction == DIR_FORWARD {
 			client = &server.forwardClient
 		} else {
 			client = &server.directClient
@@ -146,8 +142,22 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (server *Proxy) ListenAndServe() {
 	server.doForward = len(server.ForwardAddr) != 0
+	server.doMatchRule = len(server.RuleFile) != 0
 
-	server.setupRule()
+	// setup rule
+	switch server.Direction {
+	case "block":
+		server.direction = DIR_BLOCK
+	case "direct":
+		server.direction = DIR_DIRECT
+	case "forward":
+		server.direction = DIR_FORWARD
+	default:
+		log.Fatalf("unrecognized direction: %s", server.Direction)
+	}
+	if server.doMatchRule {
+		server.loadRule()
+	}
 
 	// setup forward client
 	if server.doForward {
