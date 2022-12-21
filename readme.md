@@ -170,7 +170,7 @@ direct	baidu.com
 forward	github.com
 ```
 
-`proxy` 将忽略所有注释和空行，将所有规则按照 "direction	domain"（主意中间为 TAB） 解析。
+`proxy` 将忽略所有注释和空行，将所有规则按照 "direction	domain"（注意中间为 TAB） 解析。
 如果一个域名出现多次，则以第一次为准，因此用户可以编辑文件头来覆盖后面的规则。
 
 规则匹配将逐步匹配根域名直至匹配成功，例如匹配域名 www.baidu.com 时将依次匹配 www.baidu.com、baidu.com 和 com。
