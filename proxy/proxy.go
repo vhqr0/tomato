@@ -14,81 +14,21 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const (
-	RULE_BLOCK = iota
-	RULE_DIRECT
-	RULE_FORWARD
-)
-
 type Proxy struct {
-	LogTrace  bool
-	Forward   bool
-	RuleMode  string
-	RuleFile  string
-	LocalAddr string
-	PeerAddr  string
+	LogTrace    bool
+	LocalAddr   string
+	ForwardAddr string
+	Direction   string
+	RuleFile    string
 
+	direction      int
+	doForward      bool
 	ruleCache      map[string]int
 	ruleCacheMutex sync.RWMutex
-	ruleDefault    int
 	ruleDb         *sql.DB
 	ruleStmt       *sql.Stmt
 	directClient   http.Client
 	forwardClient  http.Client
-}
-
-func (server *Proxy) matchRule(domain string) int {
-	// not use rule db
-	if server.ruleDb == nil {
-		return server.ruleDefault
-	}
-
-	// hit in cache
-	server.ruleCacheMutex.RLock()
-	rule, ok := server.ruleCache[domain]
-	server.ruleCacheMutex.RUnlock()
-	if ok {
-		return rule
-	}
-
-	// query db
-	var ruleStr string
-	err := server.ruleStmt.QueryRow(domain).Scan(&ruleStr)
-	if err == nil {
-		// hit in db
-		switch ruleStr {
-		case "block":
-			rule = RULE_BLOCK
-		case "direct":
-			rule = RULE_DIRECT
-		case "forward":
-			rule = RULE_FORWARD
-		default:
-			rule = server.ruleDefault
-			log.Printf("unrecognized rule: %s", ruleStr)
-		}
-	} else if err == sql.ErrNoRows {
-		// not hit in db
-		pos := strings.IndexByte(domain, '.')
-		if pos == -1 {
-			// in the end, not match
-			rule = server.ruleDefault
-		} else {
-			// recusive match
-			rule = server.matchRule(domain[pos+1:])
-		}
-	} else {
-		// db error
-		log.Println(err)
-		rule = server.ruleDefault
-	}
-
-	// update cache
-	server.ruleCacheMutex.Lock()
-	server.ruleCache[domain] = rule
-	server.ruleCacheMutex.Unlock()
-
-	return rule
 }
 
 func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +47,7 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case RULE_FORWARD:
 			ruleStr = "forward"
 		default:
-			log.Printf("unrecognized rule: %d", rule)
+			log.Fatalf("unrecognized rule: %d", rule)
 		}
 		log.Printf("%v %v <=> %v [%s]", r.Method, r.RemoteAddr, r.Host, ruleStr)
 	}
@@ -119,14 +59,14 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		// do connect
 		var addr string
-		if rule == RULE_DIRECT || !server.Forward {
-			addr = r.Host
+		if server.doForward && rule == RULE_FORWARD {
+			addr = server.ForwardAddr
 		} else {
-			addr = server.PeerAddr
+			addr = r.Host
 		}
 		srvconn, err := net.Dial("tcp", addr)
 		if err != nil {
-			log.Println(err)
+			log.Print(err)
 			return
 		}
 		defer srvconn.Close()
@@ -134,42 +74,40 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// hijack
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			log.Println("get hijacker failed")
-			return
+			log.Fatal("get hijacker failed")
 		}
 		cliconn, _, err := hj.Hijack()
 		if err != nil {
-			log.Println(err)
-			return
+			log.Fatal(err)
 		}
 		defer cliconn.Close()
 
-		// relay
-		if rule == RULE_DIRECT || !server.Forward {
-			cliconn.Write([]byte(r.Proto + " 200 OK\r\n\r\n"))
-		} else {
+		if server.doForward && rule == RULE_FORWARD {
+			// forward request to proxy, proxy will send response
 			srvconn.Write([]byte(fmt.Sprintf(
 				"CONNECT %s %s\r\nHost: %s\r\n\r\n",
 				r.Host, r.Proto, r.Host)))
+		} else {
+			// send response
+			cliconn.Write([]byte(r.Proto + " 200 OK\r\n\r\n"))
 		}
-		var wg sync.WaitGroup
-		wg.Add(2)
+
+		// relay
+		ch := make(chan struct{})
 		go func() {
-			defer wg.Done()
-			io.Copy(srvconn, cliconn)
-		}()
-		go func() {
-			defer wg.Done()
 			io.Copy(cliconn, srvconn)
+			ch <- struct{}{} // done
+
 		}()
-		wg.Wait()
+		io.Copy(srvconn, cliconn)
+		<-ch // wait done
 
 	} else {
 
 		// make request
 		req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
 		if err != nil {
-			log.Println(err)
+			log.Print(err)
 			return
 		}
 		for k, vs := range r.Header {
@@ -183,14 +121,14 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// do request
 		var client *http.Client
-		if rule == RULE_DIRECT || !server.Forward {
-			client = &server.directClient
-		} else {
+		if server.doForward && rule == RULE_FORWARD {
 			client = &server.forwardClient
+		} else {
+			client = &server.directClient
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Println(err)
+			log.Print(err)
 			return
 		}
 		defer resp.Body.Close()
@@ -207,47 +145,20 @@ func (server *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (server *Proxy) ListenAndServe() {
-	// setup rule matcher
-	server.ruleCache = make(map[string]int)
-	switch server.RuleMode {
-	case "block":
-		server.ruleDefault = RULE_BLOCK
-	case "direct":
-		server.ruleDefault = RULE_DIRECT
-	case "forward":
-		server.ruleDefault = RULE_FORWARD
-	default:
-		log.Printf("unrecognized rule: %s", server.RuleMode)
-		return
-	}
-	if len(server.RuleFile) != 0 {
-		db, err := sql.Open("sqlite3", server.RuleFile)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer db.Close()
-		stmt, err := db.Prepare("select rule from data where domain = ?")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer stmt.Close()
-		server.ruleDb = db
-		server.ruleStmt = stmt
-	}
+	server.doForward = len(server.ForwardAddr) != 0
+
+	server.setupRule()
 
 	// setup forward client
-	if server.Forward {
-		proxyURL, err := url.Parse("http://" + server.PeerAddr)
+	if server.doForward {
+		proxyURL, err := url.Parse("http://" + server.ForwardAddr)
 		if err != nil {
-			log.Println(err)
-			return
+			log.Fatal(err)
 		}
 		server.forwardClient.Transport = &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 		}
 	}
 
-	log.Println(http.ListenAndServe(server.LocalAddr, server))
+	log.Fatal(http.ListenAndServe(server.LocalAddr, server))
 }
