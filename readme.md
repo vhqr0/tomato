@@ -10,7 +10,7 @@ tomato
 install
 -------
 
-1. 安装 `go` 和依赖库 `google.org/x/sys` （`go get`）。
+1. 安装 `go` 和依赖库 `golang.org/x/sys` （`go get`）。
 2. 在根目录执行 `make` ，三个可执行文件将生成到 `bin` 目录。
 3. （Optional）`scripts/dlmerge.py` 将 [domain-list](https://github.com/v2fly/domain-list-community) 转化为 `proxy` 的规则文件。
 
