@@ -18,9 +18,9 @@ type Proxy struct {
 	Direction   string
 	RuleFile    string
 
-	direction      int
 	doForward      bool
 	doMatchRule    bool
+	direction      int
 	ruleCache      map[string]int
 	ruleCacheMutex sync.RWMutex
 	directClient   http.Client

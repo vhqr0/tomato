@@ -9,33 +9,33 @@ import re
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--datadir', default='data')
+parser.add_argument('-d', '--datapath', default='data')
 args = parser.parse_args()
 
-datadir = args.datadir
+datapath = args.datapath
 
-tag2rule = {
+tag2direction = {
     'ads': 'block',
     'cn': 'direct',
     '!cn': 'forward',
 }
 
-rule_re = re.compile(r'^((\w+):)?([^\s\t#]+)( @([^\s\t#]+))?')
+line_re = re.compile(r'^((\w+):)?([^\s\t#]+)( @([^\s\t#]+))?')
 
 
 def load_rule(rules_file, default_tag):
-    for line in open(f'{datadir}/{rules_file}'):
-        res = rule_re.match(line.strip())
+    for line in open(f'{datapath}/{rules_file}'):
+        res = line_re.match(line.strip())
         if res is None:
             continue
-        cmd = res[2] or 'domain'
-        tgt = res[3].strip()
+        command = res[2] or 'domain'
+        target = res[3]
         tag = res[5] or default_tag
-        rule = tag2rule[tag]
-        if cmd in ('domain', 'full'):
-            print(f'{rule}\t{tgt}')
-        elif cmd == 'include':
-            load_rule(tgt, default_tag)
+        direction = tag2direction[tag]
+        if command in ('domain', 'full'):
+            print(f'{direction}\t{target}')
+        elif command == 'include':
+            load_rule(target, default_tag)
 
 
 load_rule('cn', 'cn')

@@ -157,11 +157,12 @@ func (server *Vpn) receiver() {
 }
 
 func (server *Vpn) ListenAndServe() {
-	if tun, err := openTun(server.Iface); err != nil {
+	// open tun
+	tun, err := openTun(server.Iface)
+	if err != nil {
 		log.Fatal(err)
-	} else {
-		server.tun = tun
 	}
+	server.tun = tun
 
 	// resolve conn
 	local, err := net.ResolveUDPAddr("udp", server.LocalAddr)
